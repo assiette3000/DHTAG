@@ -10,22 +10,32 @@ class Kademlia:
         self.k = k
         self.id_len = id_len
 
+    def hash(self, s):
+        m = hashlib.sha1()
+        m.update(s.encode("utf-8"))
+        return int.from_bytes(m.digest()[0:self.id_len], byteorder="big")
 
-def do_hash(s):
-    m = hashlib.sha1()
-    m.update(s.encode("utf-8"))
-    return int.from_bytes(m.digest(), byteorder="big")
-
-def generate_host_id(kad):
-    return random.getrandbits(kad.id_len)
+    def random_host_id(self):
+        return random.getrandbits(self.id_len)
 
 class RemoteNode:
     def __init__(self, kad, host_id, sock, addr):
         self.kad = kad
         self.host_id = host_id
-        self.sock = sock
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addr = addr
         print("connected to", self.addr, hex(self.host_id))
+
+    def __repr__(self):
+        return "RemoteNode(" + hex(self.host_id) + ", " \
+                + self.addr[0] + ":" + str(self.addr[1]) + ")"
+
+    def put(self, key, value):
+        self.sock.sendto(("put " + key + " " + value).encode("utf-8"),
+                self.addr)
+    def get(self, key):
+        self.sock.sendto(("get " + key).encode("utf-8"), self.addr)
+        return self.sock.recv(1024).decode("utf-8")
 
 class LocalNode:
     def __init__(self, kad, host_id=None):
@@ -33,7 +43,7 @@ class LocalNode:
         if host_id is not None:
             self.host_id = host_id
         else:
-            self.host_id = generate_host_id(self.kad)
+            self.host_id = self.kad.random_host_id()
         self.buckets = [[] for i in range(self.kad.id_len)]
         self.buckets[self.kad.id_len-1].append(self)
         self.store = {}
@@ -43,6 +53,10 @@ class LocalNode:
         print(self.addr)
         print(hex(self.host_id))
         print("----")
+
+    def __repr__(self):
+        return "LocalNode(" + hex(self.host_id) + ", " \
+                + self.addr[0] + ":" + str(self.addr[1]) + ")"
 
     def get_bucket_id_for_node_id(self, node_id):
         for i in range(self.kad.id_len):
@@ -74,7 +88,8 @@ class LocalNode:
 
     def put(self, key, value):
         print("put", key, "=", value)
-        l = self.find_closest(key)
+        print("bucket:",self.get_bucket_id_for_node_id(self.kad.hash(key)))
+        l = self.find_closest(self.kad.hash(key))
         if l:
             for node in l:
                 print("-->", node)
@@ -89,7 +104,7 @@ class LocalNode:
         if key in self.store:
             return self.store[key]
         else:
-            for node in self.find_closest(key):
+            for node in self.find_closest(self.kad.hash(key)):
                 v = node.get(key)
                 if (v):
                     return v
@@ -111,6 +126,11 @@ class LocalNode:
             elif cmd[0] == "host_id":
                 self.insert_node(RemoteNode(self.kad, int(cmd[1]),
                     self.sock, addr))
+            elif cmd[0] == "get":
+                v = self.get(cmd[1])
+                self.sock.sendto(str(v).encode("utf-8"), addr)
+            elif cmd[0] == "put":
+                self.put(cmd[1], cmd[2])
 
     def run(self):
         self.is_running = True
@@ -124,14 +144,21 @@ class LocalNode:
             cmd = i.split()
             if len(cmd) < 1:
                 continue
-            if cmd[0] == "exit":
-                self.is_running = False
-            elif cmd[0] == "connect":
-                self.sock.sendto(("wesh "+str(self.host_id)).encode("utf-8"),
-                        (cmd[1], int(cmd[2])))
-            elif cmd[0] == "route":
-                for i, b in enumerate(self.buckets):
-                    print(i, b)
+            try:
+                if cmd[0] == "exit":
+                    self.is_running = False
+                elif cmd[0] == "connect":
+                    self.sock.sendto(("wesh "+str(self.host_id)).encode("utf-8"),
+                            (cmd[1], int(cmd[2])))
+                elif cmd[0] == "route":
+                    for i, b in enumerate(self.buckets):
+                        print(i, b)
+                elif cmd[0] == "get":
+                    print(self.get(cmd[1]))
+                elif cmd[0] == "put":
+                    self.put(cmd[1], cmd[2])
+            except Exception as e:
+                print(e)
         self.sock.sendto(b"", self.addr)
         self.listen_thread.join()
 
