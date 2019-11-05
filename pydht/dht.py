@@ -75,10 +75,20 @@ class LocalNode:
     def get_bucket_for_node(self, node):
         return self.get_bucket_for_node_id(node.host_id)
 
+    def known_node(self, node_id):
+        b = self.get_bucket_for_node_id(node_id)
+        for n in b:
+            if n.host_id == node_id:
+                return True
+        return False
+
     def insert_node(self, node):
         b = self.get_bucket_for_node(node)
         if len(b) < self.kad.k:
-            b.append(node)
+            if self.known_node(node.host_id):
+                print("duplicate node", hex(node.host_id))
+            else:
+                b.append(node)
         else:
             # TODO if there are old nodes, replace one of them
             pass
@@ -119,13 +129,29 @@ class LocalNode:
             if len(cmd) < 1:
                 continue
             if cmd[0] == "wesh":
+                # send our host id
                 self.sock.sendto(("host_id "+str(self.host_id)).encode("utf-8"),
                         addr)
+                # add remote node to our routing table
                 self.insert_node(RemoteNode(self.kad, int(cmd[1]),
                     self.sock, addr))
+                # send routing table
+                for b in self.buckets:
+                    for n in b:
+                        naddr, nport = n.addr
+                        self.sock.sendto(("add_node "+str(n.host_id)+" "\
+                                + naddr + " " + str(nport)).encode("utf-8"),
+                                addr)
             elif cmd[0] == "host_id":
                 self.insert_node(RemoteNode(self.kad, int(cmd[1]),
                     self.sock, addr))
+            elif cmd[0] == "add_node":
+                print(cmd)
+                if self.known_node(int(cmd[1])):
+                    print("ignored", hex(int(cmd[1])))
+                else:
+                    self.sock.sendto(("wesh "+str(self.host_id)).encode("utf-8"),
+                            (cmd[2], int(cmd[3])))
             elif cmd[0] == "get":
                 v = self.get(cmd[1])
                 self.sock.sendto(str(v).encode("utf-8"), addr)
